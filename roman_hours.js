@@ -2,22 +2,27 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: blue; icon-glyph: hourglass-half;
 // define widget geometry
-var debug = "";
 const small = (config.widgetFamily === 'small')
-console.log(small)
-const width = small ? 125 : 125;
+const width = small ? 127 : 125;
 const h = small ? 4 : 5;
 var w = new ListWidget();
 w.backgroundColor=new Color("#111111");
+
+// following variables may be edited
+const vigiliae = false; // four vigilis or twelve hours
+
+var timezone = 1; // UTC-offset, summertime is added automatically
 
 // define time const
 const now = new Date();
 const weekday = now.getDay();
 const monthday = now.getDate();
-const month = now.getMonth()+1;
+const month = now.getMonth() + 1;
 const year = now.getFullYear();
+const summertime = (((month > 4) && (month < 10)) || (((month === 3) ||(month === 10)) && (monthday-weekday >= 25))) ? true : false;
+timezone = summertime ? timezone+1 : timezone;
 
-const leapyear = ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0) ? true : false;
+const leapyear = ((year % 4 === 0) && (year % 100 !== 0)) || (year % 400 === 0) ? true : false;
 const minutes = now.getMinutes();
 const hours = now.getHours();
 
@@ -26,7 +31,6 @@ const fm = FileManager.iCloud();
 var cache = readcache();
 // change Background image
 w.backgroundImage=fm.readImage( fm.joinPath( fm.documentsDirectory(), 'Background_m_m_db.jpg' ));
-
 var bool = 1;
 var called = 0;
 var times = {lat:null, long:null, gps:false};
@@ -60,6 +64,12 @@ if (bool > 0) {
   times = await getdaylength(cache.times);
   console.log([feast, colour, comm, commc, times, "read"]);  
 } else if (bool < 0) {
+  if (!small) { // disabled
+    var horae = gethorae();
+    for (var i=0;i<horae.length;i++) {
+      await setNotification(horae[i].start, horae[i].length, horae[i].name, timezone);
+    }
+  }
   try {
     var array = await getfeast();
     times = await getdaylength({lat:times.lat, long:times.long, gps:times.gps});
@@ -100,18 +110,28 @@ const hora = gethora();
 getwidget(1440, hours*60+minutes, feast + '§' + comm);
 getwidget(168, weekday*24+hours, "Hebdomada");
 getwidget(1, hora[2], hora[0]);
+const padding = small ? 10 : 20;
+w.setPadding(padding, padding, padding, padding)
 // save widget
 Script.setWidget(w);
 Script.complete();
-w.presentMedium();
 
-/* const note = new Notification();
-note.title = small ? "small" : "medium";
-note.body = debug;
-notedate = new Date()
-notedate.setMinutes(now.getSeconds()+7)
-note.setTriggerDate(notedate)
-note.schedule(); */
+if (small) {
+  w.presentSmall();
+} else {
+  w.presentMedium();
+}
+
+// make calendar entry for every canonical hour
+if (bool<0 && !small) {
+  var horae = await gethorae();
+  for (var i=0;i<horae.length;i++) {
+    console.log(horae[i])
+    let returnval = await setNotification(horae[i].start, horae[i].length, horae[i].name, timezone);
+//     console.log(returnval)
+  }
+}
+
 
 // saves date-stamp, feast-name, colour and calculated sunrise and -set times to cache
 function savecache(array) {
@@ -132,12 +152,12 @@ async function getfeast() {
   const d = monthday != 1 ? monthday-1 : monthday+1;
   const command = monthday != 1 ? "next" : "previous";
   const divoff = new Request("https://divinumofficium.com/cgi-bin/horas/Pofficium.pl?date1=" + month + "-" + d + "-" + year + "&version=" + version + "&command=" + command);
-console.log(divoff.url)
+//console.log(divoff.url)
   const html = await divoff.loadString();
   //console.log(html)
   const position = html.search(/FORM ACTION=\"Pofficium.pl\" METHOD=post TARGET=_self>\n<P ALIGN=CENTER><FONT COLOR=(.*?)>(.*?)<BR>/);
   var feast = html.substring(position, position+500).replace(/FORM ACTION=\"Pofficium.pl\" METHOD=post TARGET=_self>\n<P ALIGN=CENTER><FONT COLOR=/, "");
-console.log(feast)
+//console.log(feast)
   const colour = feast.substring(0, feast.search(/>/));
   var comm = feast.substring(feast.search(/82%; color:/), feast.search(/<\/I><\/SPAN>/));
   const commcolour = comm.substring(11, comm.search(/;"><I>/));
@@ -146,8 +166,10 @@ console.log(feast)
   return [feast, colour, comm, commcolour];
 }
 
+// caclulates sunrise and sunset using gps position
 async function getdaylength( time_object ) {
   var lat, long, timediff, sunrise, sunset;
+  // load from cache if time_object has entries
   if (!time_object.timediff) {
     try {
       const here = await Location.current();
@@ -161,6 +183,7 @@ async function getdaylength( time_object ) {
       console.log("Loaded location from cache");  
       time_object.gps = false;
     }
+    // we get an error if the sun doesn't rise/sink at all
     lat = lat>66.5 ? 66.5 : lat<-66.5 ? -66.5 : lat;
     timediff = long/180*12;
   } else {
@@ -177,18 +200,28 @@ async function getdaylength( time_object ) {
       time -= 24;
       date += 1;
     }
-    // count date from Dec 21
-    date += 10;
+    var D = date;
+    // count date from Dec 20
+    date += 11;
     if (date>yearlength) {
       date -= yearlength;
     } else if (date < 0) {
       date += 365;
     }
+    // time equation
+    D += (year-2000)*365 + Math.floor((year-2000)/4) - Math.floor((year-2000)/100) + Math.floor((year-2000)/400);
+    var M = 6.24004077+0.01720197*D
+    var dt = (-7.659*Math.sin(M)+9.863*Math.sin(2*M+3.5932))/60
+    console.log(dt)
+    // sun equation
     const declination = 23.43655*Math.cos(date/yearlength*2*3.142);
     sunrise = Math.acos(-Math.tan(lat/180*3.142)*Math.tan(declination/180*3.142))/3.142*12;
+    sunrise += -0.83/360*24-dt; // atmospheric refraction
     sunset = 24-Math.acos(-Math.tan(lat/180*3.142)*Math.tan(declination/180*3.142))/3.142*12;
+    sunset += 0.83/360*24-dt;
     daylength=sunset-sunrise;
   } else {
+    // load from cache
     time = time>24 ? time-24 : time
     daylength = time_object.daylength;
     sunrise = time_object.sunrise;
@@ -199,16 +232,19 @@ async function getdaylength( time_object ) {
   return {time:time, daylength:daylength, sunrise:sunrise, sunset:sunset, timediff:timediff, lat:lat, long:long, gps:time_object.gps};
 }
 
+// return the name of thr current hour
+// uses global variables instead of input
 function gethora () {
   var time = times.time;
   var daylength = times.daylength;
   var sunrise = times.sunrise;
   var sunset = times.sunset;
-  if (time<sunrise || time > sunset) {
-    time = time < sunrise ? time+24 : time;
-    var vigiliae = 4*(time-sunset)/(24-daylength);
-    var vigilia = Math.ceil(vigiliae);
-    var name;
+  var name, hora, horae;
+  const night = (time<sunrise || time > sunset);
+  time = time < sunrise ? time+24 : time;
+  if (night && vigiliae) {
+    horae = 4*(time-sunset)/(24-daylength);
+    hora = Math.ceil(horae);
     switch (vigilia) {
       case 1:
       name = "Vigilia prima";
@@ -223,41 +259,55 @@ function gethora () {
       name = "Vigilia quarta";
       break;
     }
-    return [name, vigilia, vigiliae-vigilia+1];
   } else {
-    var horae = (time-sunrise)/(daylength/12);
-    var hora = Math.ceil(horae);
+    horae = night ? 12*(time-sunset)/(24-daylength) : (time-sunrise)/(daylength/12);
+    hora = Math.ceil(horae);
     switch (hora) {
       case 1:
-      return ["Hora prima", hora, horae-hora+1];
+      name = "Prima hora";
+      break;
       case 2:
-      return ["Hora secunda", hora, horae-hora+1];
+      name = "Secunda hora";
+      break;
       case 3:
-      return ["Hora tertia", hora, horae-hora+1];
+      name = "Tertia hora";
+      break;
       case 4:
-      return ["Hora quarta", hora, horae-hora+1];
+      name = "Quarta hora";
+      break;
       case 5: 
-      return ["Hora quinta", hora, horae-hora+1];
+      name = "Quinta hora";
+      break;
       case 6:
-      return ["Hora sexta", hora, horae-hora+1];
+      name = "Sexta hora";
+      break;
       case 7:
-      return ["Hora septima", hora, horae-hora+1];
+      name = "Septima hora";
+      break;
       case 8:
-      return ["Hora octava", hora, horae-hora+1];
+      name = "Octava hora";
+      break;
       case 9:
-      return ["Hora nona", hora, horae-hora+1];
+      name = "Nona hora";
+      break;
       case 10:
-      return ["Hora decima", hora, horae-hora+1];
+      name = "Decima hora";
+      break;
       case 11:
-      return ["Hora undecima", hora, horae-hora+1];
+      name = "Undecima hora";
+      break;
       case 12:
-      return ["Hora duodecima", hora, horae-hora+1];
+      name = "Duodecima hora";
+      break;
     }
+    if (night) name += " noctis";
   }
+  return [name, hora, horae-hora+1];
 }
 
 function getwidget(total, haveGone, str) {
-  const maxlen = small ? 19 : 42;
+  const maxlen = small ? 20 : 42;
+  const maxlen2 = small ? 24 : 46;
   const normalfont = small ? 11 : 13;
   var strr = str.split("§");
   str = strr[0];
@@ -281,12 +331,11 @@ function getwidget(total, haveGone, str) {
     const titlew = w.addText(strs[0]);
     titlew.textColor = new Color("#ccc");
     titlew.font = Font.boldSystemFont(normalfont);
-    if (small) titlew.centerAlignText()
+    if (small) titlew.centerAlignText();
     lengthcorrect = strwidthcorr(longname(strs[1], 2*maxlen));
 //     third line
     if (strs[1].length>maxlen-lengthcorrect) {
       var strq = strs[1].split(" ~ ");
-      console.log(strq)
       lengthcorrect = strwidthcorr(strq[0]);
       strq[0] = shortname(strq[0], maxlen-lengthcorrect);
       lengthcorrect = strwidthcorr(strq[0])
@@ -298,16 +347,18 @@ function getwidget(total, haveGone, str) {
         strq[0] = a.join(' ');
       }
       strq[0] = longname(strq[0], maxlen-lengthcorrect);
-      lengthcorrect = strwidthcorr(strq[1])
-      strq[1] = b != "" ? shortname(longname(b + "~ " + strq[1], maxlen), maxlen-lengthcorrect) : longname(strq[1], maxlen-lengthcorrect);
       const titlew2 = w.addText(strq[0]);
       titlew2.textColor = new Color("#ccc");
       titlew2.font = Font.boldSystemFont(normalfont);
       if (small) titlew2.centerAlignText();
-      const titlew3 = w.addText(strq[1]);
-      titlew3.textColor = new Color("#ccc");
-      titlew3.font = Font.boldSystemFont(normalfont);
-      if (small) titlew3.centerAlignText();
+      if (strq[1]) {
+        lengthcorrect = strwidthcorr(strq[1])
+        strq[1] = b != "" ? shortname(longname(b + "~ " + strq[1], maxlen), maxlen-lengthcorrect) : longname(strq[1], maxlen-lengthcorrect);
+        const titlew3 = w.addText(strq[1]);
+        titlew3.textColor = new Color("#ccc");
+        titlew3.font = Font.boldSystemFont(normalfont);
+        if (small) titlew3.centerAlignText();
+      }
     } else {
       const titlew2 = w.addText(strs[1]);
       titlew2.textColor = new Color("#ccc");
@@ -320,30 +371,32 @@ function getwidget(total, haveGone, str) {
     titlew.font = Font.boldSystemFont(normalfont);
   }
   if (strr[1] != "") {
-    if (strr[1].length>Math.floor(maxlen*1.3)) {
+    if (strr[1].length>maxlen2) {
       lengthcorrect = strwidthcorr(strr[1]);
-      strr[1] = shortname(strr[1], Math.floor(maxlen*1.2)-lengthcorrect);
-      lengthcorrect = strwidthcorr(strr[1])
+      strr[1] = shortname(strr[1], maxlen2-lengthcorrect);
+      lengthcorrect = strwidthcorr(strr[1]);
       b = "";
-      while (strr[1].length>Math.floor(maxlen*1.1)-lengthcorrect) {
+      while (strr[1].length>maxlen2-lengthcorrect) {
         let a = strr[1].split(" ");
         b = a[a.length-1] + " " + b;
         a.pop();
-        strs[0] = a.join(' ');
+        strr[1] = a.join(' ');
       }
-      strr[1] = longname(b, Math.floor(maxlen*1.1)-lengthcorrect);
-      lengthcorrect = strwidthcorr(strr[2])
-      strr[2] = shortname(longname(b, maxlen*2), Math.floor(maxlen*1.1)-lengthcorrect);
+      strr[1] = longname(strr[1], maxlen2-lengthcorrect);
       const titlewc = w.addText(strr[1]);
       titlewc.textColor = new Color("#ccc");
       titlewc.font = Font.boldSystemFont(normalfont-2);
       if (small) titlewc.centerAlignText();
-      const titlewc2 = w.addText(strr[2]);
-      titlewc2.textColor = new Color("#ccc");
-      titlewc2.font = Font.boldSystemFont(normalfont-2);
-      if (small) titlewc2.centerAlignText();
+      if (b !== "") {
+        lengthcorrect = strwidthcorr(b)
+        strr[2] = shortname(longname(b, maxlen2), maxlen2-lengthcorrect);
+        const titlewc2 = w.addText(strr[2]);
+        titlewc2.textColor = new Color("#ccc");
+        titlewc2.font = Font.boldSystemFont(normalfont-2);
+        if (small) titlewc2.centerAlignText();
+      }
     } else {
-      strr[1] = shortname(longname(strr[1], maxlen*2), Math.floor(maxlen*1.1)-strwidthcorr(strr[1]))
+      strr[1] = shortname(longname(strr[1], maxlen*2), maxlen2-strwidthcorr(strr[1]))
       const titlewc = w.addText(strr[1]);
       titlewc.textColor = new Color("#ccc");
       titlewc.font = Font.boldSystemFont(normalfont-2);
@@ -353,6 +406,7 @@ function getwidget(total, haveGone, str) {
   const line = w.addStack();
   const imgt = line.addImage(creatProgress(total,haveGone));
   imgt.imageSize = new Size(width, h);
+  if (small) imgt.centerAlignImage();
   // Add timstamp
   if (total === 1) {
     const sunhour = Math.floor(times.time);
@@ -376,6 +430,7 @@ function getwidget(total, haveGone, str) {
   }
 }
 
+// some letters are longer than others
 function strwidthcorr(str) {
   var lengthcorrect = ((str.match(/m/g) || []).length);
   lengthcorrect += ((str.match(/M/g) || []).length);
@@ -385,6 +440,7 @@ function strwidthcorr(str) {
   return lengthcorrect;
 }
 
+// a bunch of abbreviations
 function shortname(str, maxlen) {
   var i = 0;
   while (str.length>maxlen && i<35) {
@@ -500,6 +556,7 @@ function shortname(str, maxlen) {
   return str;
 }
 
+// abbreviations are ugly
 function longname(str, maxlen) {
   var str_out = str;
   var i = 35;
@@ -580,12 +637,12 @@ function longname(str, maxlen) {
       str = str.replace("Tmp.", "Temporum");
       break;
       case 24:
-      str = str.replace("inf.", "infra");
+      str = str.replace(" inf.", " infra");
       str = str.replace("Inf.", "Infra");
       break;
       case 25:
       str = str.replace("Oct.", "Octavam");
-      str = str.replace("oct.", "octavam");
+      str = str.replace(" oct.", " octavam");
       break;
       case 26:
       str = str.replace("Quat.", "Quattuor");
@@ -596,11 +653,11 @@ function longname(str, maxlen) {
       str = str.replace("Simpl.", "Simplex");
       break;
       case 29:
-      str = str.replace("cl.", "classis");
+      str = str.replace(" cl.", " classis");
       break;
       case 30:
       str = str.replace("Semid.", "Semidupl.");
-      str = str.replace("maj.", "majus");
+      str = str.replace(" maj.", " majus");
       break;
     }
     if (str.length < maxlen) {
@@ -631,59 +688,76 @@ function creatProgress(total,havegone) {
   return context.getImage();
 }
 
-function setNotification() {
-  
+// a list of all canonical hours
+function gethorae() {
+  const daylength = times.daylength;
+  const sunrise = times.sunrise;
+  const sunset = times.sunset;
+  const timediff = times.timediff;
+
+  const laudes = sunrise;
+  const primam = sunrise+daylength/24; // nach der Laudes
+  const sextam = sunrise+daylength/12*5; // Beginn der sechsten Stunde
+  const vesperas = sunset-daylength/24; // Mitte der zwölften Stunde
+  const completorium = sunset+(24-daylength)/12;
+  const easter = {2021:{m:4,d:4},2022:{m:4,d:17}};
+  const thiseaster = easter[year];
+  var matutinum, tertiam, nonam;
+  if (month>10 || (month < thiseaster.m|| (month === thiseaster.m && monthday < thiseaster.d ))) {
+    // vom 1. Oktober bis Ostern
+    matutinum = sunrise-(24-daylength)/12*5; // achte Stunde der Nacht
+    tertiam = sunrise+daylength/12; // zweite Stunde (im Sommer vierte)
+    nonam = sunrise+daylength/12*8; // Beginn neunte Stunde
+  } else {
+  // Ostern bis Ende Oktober
+    matutinum = sunrise-1 // sollte eigentlich von Länge der Vigil abhängen
+    tertiam = sunrise+daylength/12*3; // vierte Stunde
+    nonam = sunrise+daylength/12*7.5 // Mitte der achten Stunde
+  }
+  return [{name:"Matutinum",start:matutinum,length:60},{name:"Laudes",start:laudes,length:15},{name:"Primam",start:primam,length:12},{name:"Tertiam",start:tertiam,length:8},{name:"Sextam",start:sextam,length:8},{name:"Nonam",start:nonam,length:8},{name:"Vesperas",start:vesperas,length:15},{name:"Completorium",start:completorium,length:15}];
 }
 
-function regionalcalendar() {
-//   use local feast of archdiocese of Bamberg
-  switch (month) {
-    case 2:
-    switch (monthday) {
-      case 1:
-      return ["Commemoratio S. Brigidæ Virginis", "com"];
-      case 4:
-      return ["S. Dorotheæ Virginis et Martyris ~ Semiduplex", "red"];
-      case 16:
-      return ["S. Julianæ Virginis et Martyris ~ Simplex", "red"];  
+// make calendar event
+async function setNotification(start, length, name, tz) {
+  const timediff = times.timediff;
+  var calendar = await Calendar.forEventsByTitle("horae");
+  var x = start;
+  var event = new CalendarEvent();
+  // delete yesterday's
+  var events = await CalendarEvent.yesterday([calendar]);
+  for (var j=0;j<events.length;j++) {
+    if (events[j].title === name) {
+      var temp = events[j];
+      await temp.remove();
+      //console.log("deleted " + events[j].title + "; j: " + j);
     }
-    break;
-    case 3:
-    switch (monthday) {
-      case 3:
-      return ["S. Cunegundis Virginis Imperatricis ~ Duplex I. classis", "white"];  
-      case 12:
-      return ["Canonizatio S. Henrici Imperatoris et Confessoris ~ Duplex", "white"];  
-      case 17:
-      return ["S. Gertrudis Virginis ~ Semiduplex", "white"];  
-      case 29:
-      return ["Canonizatio S. Cunegundis Virginis ~ Duplex", "white"];  
-    }
-    break;
-    case 4:
-    switch (monthday) {
-      case 4:
-      return ["S. Ambrosii Episcopi Confessoris et Ecclesia Doctoris ~ Duplex", "white"];  
-      case 11:
-      return ["Commemoratio S. Isacii Confessoris", "com"];  
-      case 25:
-      return ["S. Georgii Martyris Ecclesiæ Cathedralis Bamberg, Patroni ~ Duplex II. classis", "red"];  
-    }
-    break;
-    case 5:
-    switch (monthday) {
-      case 1:
-      case 2:
-      case 3:
-      case 4:
-      case 5:
-      case 6:
-      case 7:
-      if (weekday===6) {
-        return ["Beatæ Mariæ Virginis Patronæ Bavariæ ~ Duplex I. classis", "white"];
-      }
-      break;
-    }
-    break;
   }
+  // add new
+  event.calendar = calendar;
+  var begin = new Date();
+  begin.setHours(Math.floor(x-timediff+tz))
+  begin.setMinutes(Math.floor((x-timediff+tz-begin.getHours())*60));
+  begin.setSeconds(0)
+  console.log(begin)
+  var end = new Date(begin.getTime() + length*60000)
+  events = await CalendarEvent.today([calendar]);
+  var z = false;
+  for (var k=0;k<events.length;k++) {
+    if (events[k].title === name) {
+      if (z) {
+        await events[k].remove();
+        continue;
+      } else {
+        event = events[k];
+        //console.log([event, begin, end]);
+        z = true;
+      }
+    }
+  }
+  //z = false; // disable if
+  event.startDate = begin;
+  event.endDate = end;
+  event.title = name;
+  if (!z) await event.save();
+  return 0;
 }
